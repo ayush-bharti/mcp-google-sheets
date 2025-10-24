@@ -152,6 +152,42 @@ This server exposes the following tools for interacting with Google Sheets:
 *   **`copy_sheet`**: Duplicates a sheet within a spreadsheet. *(Verify parameters if implemented)*
 *   **`rename_sheet`**: Renames an existing sheet. *(Verify parameters if implemented)*
 
+### Named Range Tools
+
+*   **`list_named_ranges`**: Lists all named ranges in a spreadsheet with their details.
+    *   `spreadsheet_id` (string)
+    *   _Returns:_ List of named range objects with `namedRangeId`, `name`, and `range` details.
+*   **`get_named_range`**: Gets information about a specific named range.
+    *   `spreadsheet_id` (string)
+    *   `name` (string): Name of the named range.
+    *   _Returns:_ Named range object or error if not found.
+*   **`create_named_range`**: Creates a new named range in a spreadsheet.
+    *   `spreadsheet_id` (string)
+    *   `name` (string): Name for the named range.
+    *   `sheet` (string): Name of the sheet.
+    *   `range` (string): Cell range in A1 notation (e.g., `'A1:C10'`).
+    *   _Returns:_ Success object with `namedRangeId` or error.
+*   **`update_named_range`**: Updates an existing named range (name and/or range).
+    *   `spreadsheet_id` (string)
+    *   `current_name` (string): Current name of the named range.
+    *   `new_name` (optional string): New name for the named range.
+    *   `sheet` (optional string): New sheet name (required if range is provided).
+    *   `range` (optional string): New cell range in A1 notation.
+    *   _Returns:_ Success object with updated fields or error.
+*   **`delete_named_range`**: Deletes a named range from a spreadsheet.
+    *   `spreadsheet_id` (string)
+    *   `name` (string): Name of the named range to delete.
+    *   _Returns:_ Success object with deleted range info or error.
+*   **`get_named_range_values`**: Gets values from a named range.
+    *   `spreadsheet_id` (string)
+    *   `name` (string): Name of the named range.
+    *   _Returns:_ Object with `values`, `num_rows`, and `num_cols` or error.
+*   **`update_named_range_values`**: Updates values in a named range.
+    *   `spreadsheet_id` (string)
+    *   `name` (string): Name of the named range.
+    *   `data` (2D array): Values to update.
+    *   _Returns:_ Success object with update statistics or error.
+
 **MCP Resources:**
 
 *   **`spreadsheet://{spreadsheet_id}/info`**: Get basic metadata about a Google Spreadsheet.
