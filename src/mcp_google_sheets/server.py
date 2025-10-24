@@ -928,6 +928,450 @@ def share_spreadsheet(spreadsheet_id: str,
             
     return {"successes": successes, "failures": failures}
 
+# Named Range Tools
+
+@mcp.tool()
+def list_named_ranges(spreadsheet_id: str, ctx: Context = None) -> List[Dict[str, Any]]:
+    """
+    List all named ranges in a Google Spreadsheet.
+    
+    Args:
+        spreadsheet_id: The ID of the spreadsheet
+    
+    Returns:
+        List of named ranges with their details
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+    
+    # Get spreadsheet data including named ranges
+    spreadsheet = sheets_service.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        includeGridData=False
+    ).execute()
+    
+    named_ranges = spreadsheet.get('namedRanges', [])
+    
+    result = []
+    for named_range in named_ranges:
+        range_info = {
+            'namedRangeId': named_range.get('namedRangeId'),
+            'name': named_range.get('name'),
+            'range': {}
+        }
+        
+        # Extract range information
+        if 'range' in named_range:
+            range_data = named_range['range']
+            range_info['range'] = {
+                'sheetId': range_data.get('sheetId'),
+                'startRowIndex': range_data.get('startRowIndex', 0),
+                'endRowIndex': range_data.get('endRowIndex'),
+                'startColumnIndex': range_data.get('startColumnIndex', 0),
+                'endColumnIndex': range_data.get('endColumnIndex')
+            }
+            
+            # Get sheet name for better readability
+            for sheet in spreadsheet.get('sheets', []):
+                if sheet['properties']['sheetId'] == range_data.get('sheetId'):
+                    range_info['range']['sheetName'] = sheet['properties']['title']
+                    break
+        
+        result.append(range_info)
+    
+    return result
+
+
+@mcp.tool()
+def get_named_range(spreadsheet_id: str, name: str, ctx: Context = None) -> Dict[str, Any]:
+    """
+    Get information about a specific named range.
+    
+    Args:
+        spreadsheet_id: The ID of the spreadsheet
+        name: The name of the named range
+    
+    Returns:
+        Named range information or error if not found
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+    
+    # Get all named ranges and find the specific one
+    named_ranges = list_named_ranges(spreadsheet_id, ctx)
+    
+    for named_range in named_ranges:
+        if named_range['name'] == name:
+            return named_range
+    
+    return {"error": f"Named range '{name}' not found"}
+
+
+@mcp.tool()
+def create_named_range(spreadsheet_id: str, 
+                      name: str,
+                      sheet: str,
+                      range: str,
+                      ctx: Context = None) -> Dict[str, Any]:
+    """
+    Create a new named range in a Google Spreadsheet.
+    
+    Args:
+        spreadsheet_id: The ID of the spreadsheet
+        name: The name for the named range
+        sheet: The name of the sheet
+        range: The cell range in A1 notation (e.g., 'A1:C10')
+    
+    Returns:
+        Result of the operation
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+    
+    # Get sheet ID
+    spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    sheet_id = None
+    
+    for s in spreadsheet['sheets']:
+        if s['properties']['title'] == sheet:
+            sheet_id = s['properties']['sheetId']
+            break
+            
+    if sheet_id is None:
+        return {"error": f"Sheet '{sheet}' not found"}
+    
+    # Parse A1 notation to grid coordinates
+    try:
+        # Parse range like "A1:C10"
+        if ':' in range:
+            start_cell, end_cell = range.split(':')
+        else:
+            start_cell = end_cell = range
+        
+        # Convert A1 notation to row/column indices
+        def a1_to_indices(cell):
+            import re
+            match = re.match(r'([A-Z]+)(\d+)', cell.upper())
+            if not match:
+                raise ValueError(f"Invalid cell reference: {cell}")
+            
+            col_str, row_str = match.groups()
+            
+            # Convert column letters to index (A=0, B=1, etc.)
+            col_index = 0
+            for char in col_str:
+                col_index = col_index * 26 + (ord(char) - ord('A') + 1)
+            col_index -= 1  # Convert to 0-based
+            
+            row_index = int(row_str) - 1  # Convert to 0-based
+            
+            return row_index, col_index
+        
+        start_row, start_col = a1_to_indices(start_cell)
+        end_row, end_col = a1_to_indices(end_cell)
+        
+        # Ensure end indices are inclusive (add 1 for API)
+        end_row += 1
+        end_col += 1
+        
+    except Exception as e:
+        return {"error": f"Invalid range format '{range}': {str(e)}"}
+    
+    # Create the named range request
+    request_body = {
+        "requests": [
+            {
+                "addNamedRange": {
+                    "namedRange": {
+                        "name": name,
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": start_row,
+                            "endRowIndex": end_row,
+                            "startColumnIndex": start_col,
+                            "endColumnIndex": end_col
+                        }
+                    }
+                }
+            }
+        ]
+    }
+    
+    # Execute the request
+    try:
+        result = sheets_service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body=request_body
+        ).execute()
+        
+        return {
+            "success": True,
+            "namedRangeId": result['replies'][0]['addNamedRange']['namedRange']['namedRangeId'],
+            "name": name,
+            "range": range,
+            "sheet": sheet
+        }
+    except Exception as e:
+        return {"error": f"Failed to create named range: {str(e)}"}
+
+
+@mcp.tool()
+def update_named_range(spreadsheet_id: str,
+                      current_name: str,
+                      new_name: Optional[str] = None,
+                      sheet: Optional[str] = None,
+                      range: Optional[str] = None,
+                      ctx: Context = None) -> Dict[str, Any]:
+    """
+    Update an existing named range (name and/or range).
+    
+    Args:
+        spreadsheet_id: The ID of the spreadsheet
+        current_name: The current name of the named range
+        new_name: The new name for the named range (optional)
+        sheet: The new sheet name (required if range is provided)
+        range: The new cell range in A1 notation (optional)
+    
+    Returns:
+        Result of the operation
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+    
+    # First, get the current named range
+    current_range = get_named_range(spreadsheet_id, current_name, ctx)
+    if 'error' in current_range:
+        return current_range
+    
+    named_range_id = current_range['namedRangeId']
+    requests = []
+    
+    # Prepare update request
+    update_fields = []
+    named_range_update = {
+        "namedRangeId": named_range_id
+    }
+    
+    # Update name if provided
+    if new_name:
+        named_range_update["name"] = new_name
+        update_fields.append("name")
+    
+    # Update range if provided
+    if range and sheet:
+        # Get sheet ID
+        spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        sheet_id = None
+        
+        for s in spreadsheet['sheets']:
+            if s['properties']['title'] == sheet:
+                sheet_id = s['properties']['sheetId']
+                break
+                
+        if sheet_id is None:
+            return {"error": f"Sheet '{sheet}' not found"}
+        
+        # Parse A1 notation (reuse logic from create_named_range)
+        try:
+            if ':' in range:
+                start_cell, end_cell = range.split(':')
+            else:
+                start_cell = end_cell = range
+            
+            def a1_to_indices(cell):
+                import re
+                match = re.match(r'([A-Z]+)(\d+)', cell.upper())
+                if not match:
+                    raise ValueError(f"Invalid cell reference: {cell}")
+                
+                col_str, row_str = match.groups()
+                
+                col_index = 0
+                for char in col_str:
+                    col_index = col_index * 26 + (ord(char) - ord('A') + 1)
+                col_index -= 1
+                
+                row_index = int(row_str) - 1
+                
+                return row_index, col_index
+            
+            start_row, start_col = a1_to_indices(start_cell)
+            end_row, end_col = a1_to_indices(end_cell)
+            
+            end_row += 1
+            end_col += 1
+            
+            named_range_update["range"] = {
+                "sheetId": sheet_id,
+                "startRowIndex": start_row,
+                "endRowIndex": end_row,
+                "startColumnIndex": start_col,
+                "endColumnIndex": end_col
+            }
+            update_fields.append("range")
+            
+        except Exception as e:
+            return {"error": f"Invalid range format '{range}': {str(e)}"}
+    
+    elif range and not sheet:
+        return {"error": "Sheet name is required when updating range"}
+    
+    if not update_fields:
+        return {"error": "No updates specified (provide new_name and/or range with sheet)"}
+    
+    # Create the update request
+    request_body = {
+        "requests": [
+            {
+                "updateNamedRange": {
+                    "namedRange": named_range_update,
+                    "fields": ",".join(update_fields)
+                }
+            }
+        ]
+    }
+    
+    # Execute the request
+    try:
+        result = sheets_service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body=request_body
+        ).execute()
+        
+        return {
+            "success": True,
+            "updated_fields": update_fields,
+            "old_name": current_name,
+            "new_name": new_name or current_name
+        }
+    except Exception as e:
+        return {"error": f"Failed to update named range: {str(e)}"}
+
+
+@mcp.tool()
+def delete_named_range(spreadsheet_id: str, name: str, ctx: Context = None) -> Dict[str, Any]:
+    """
+    Delete a named range from a Google Spreadsheet.
+    
+    Args:
+        spreadsheet_id: The ID of the spreadsheet
+        name: The name of the named range to delete
+    
+    Returns:
+        Result of the operation
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+    
+    # First, get the named range to find its ID
+    named_range = get_named_range(spreadsheet_id, name, ctx)
+    if 'error' in named_range:
+        return named_range
+    
+    named_range_id = named_range['namedRangeId']
+    
+    # Create the delete request
+    request_body = {
+        "requests": [
+            {
+                "deleteNamedRange": {
+                    "namedRangeId": named_range_id
+                }
+            }
+        ]
+    }
+    
+    # Execute the request
+    try:
+        result = sheets_service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body=request_body
+        ).execute()
+        
+        return {
+            "success": True,
+            "deleted_range": name,
+            "namedRangeId": named_range_id
+        }
+    except Exception as e:
+        return {"error": f"Failed to delete named range: {str(e)}"}
+
+
+@mcp.tool()
+def get_named_range_values(spreadsheet_id: str, name: str, ctx: Context = None) -> Dict[str, Any]:
+    """
+    Get values from a named range in a Google Spreadsheet.
+    
+    Args:
+        spreadsheet_id: The ID of the spreadsheet
+        name: The name of the named range
+    
+    Returns:
+        Values from the named range or error if not found
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+    
+    try:
+        # Use the named range directly in the API call
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=name  # Can use named range name directly
+        ).execute()
+        
+        values = result.get('values', [])
+        
+        return {
+            "range_name": name,
+            "values": values,
+            "num_rows": len(values),
+            "num_cols": len(values[0]) if values else 0
+        }
+    except Exception as e:
+        return {"error": f"Failed to get values from named range '{name}': {str(e)}"}
+
+
+@mcp.tool()
+def update_named_range_values(spreadsheet_id: str,
+                             name: str,
+                             data: List[List[Any]],
+                             ctx: Context = None) -> Dict[str, Any]:
+    """
+    Update values in a named range in a Google Spreadsheet.
+    
+    Args:
+        spreadsheet_id: The ID of the spreadsheet
+        name: The name of the named range
+        data: 2D array of values to update
+    
+    Returns:
+        Result of the update operation
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+    
+    # Prepare the value range object
+    value_range_body = {
+        'values': data
+    }
+    
+    try:
+        # Call the Sheets API to update values using named range
+        result = sheets_service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=name,  # Can use named range name directly
+            valueInputOption='USER_ENTERED',
+            body=value_range_body
+        ).execute()
+        
+        return {
+            "success": True,
+            "range_name": name,
+            "updated_rows": result.get('updatedRows', 0),
+            "updated_columns": result.get('updatedColumns', 0),
+            "updated_cells": result.get('updatedCells', 0)
+        }
+    except Exception as e:
+        return {"error": f"Failed to update named range '{name}': {str(e)}"}
+
+
 def main():
     # Run the server
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

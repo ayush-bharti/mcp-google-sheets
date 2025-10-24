@@ -9,5 +9,8 @@ wheels/
 **/token.json
 **/service_account.json
 
+run_mcp_server.sh
+run_mcp_server.py
+
 # Virtual environments
 .venv
