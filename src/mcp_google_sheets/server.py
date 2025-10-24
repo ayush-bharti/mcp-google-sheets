@@ -1371,3 +1371,7 @@ def update_named_range_values(spreadsheet_id: str,
 def main():
     # Run the server
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()
